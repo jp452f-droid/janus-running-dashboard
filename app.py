@@ -12,38 +12,14 @@ st.markdown("""
     background: linear-gradient(135deg, #0f172a, #020617);
     color: white;
 }
-
-h1 {
-    color: #00f5ff;
-    text-shadow: 0 0 15px #00f5ff;
-}
-
-h2, h3 {
-    color: #ff00ff;
-    text-shadow: 0 0 10px #ff00ff;
-}
-
+h1 { color: #00f5ff; text-shadow: 0 0 15px #00f5ff; }
+h2, h3 { color: #ff00ff; text-shadow: 0 0 10px #ff00ff; }
 [data-testid="metric-container"] {
-    background: linear-gradient(135deg, #111827, #020617);
+    background: #020617;
     border: 1px solid #00f5ff;
     padding: 15px;
     border-radius: 12px;
-    box-shadow: 0 0 20px rgba(0, 245, 255, 0.2);
-}
-
-[data-testid="metric-container"] label {
-    color: #00f5ff;
-}
-
-.js-plotly-plot {
-    border-radius: 12px;
-    box-shadow: 0 0 25px rgba(255, 0, 255, 0.2);
-}
-
-details {
-    border: 1px solid #ff00ff;
-    border-radius: 10px;
-    padding: 10px;
+    box-shadow: 0 0 20px rgba(0,245,255,0.2);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -112,7 +88,7 @@ st.title("🏃 Janus Running Dashboard")
 access_token = refresh_access_token()
 
 if not access_token:
-    st.error("❌ Token error")
+    st.error("Token error")
     st.stop()
 
 # =========================
@@ -126,6 +102,9 @@ if not isinstance(data, list) or len(data) == 0:
 
 df = pd.DataFrame(data)
 
+# =========================
+# 🛠️ FILTER RUNS
+# =========================
 if "type" in df.columns:
     df = df[df["type"] == "Run"]
 elif "sport_type" in df.columns:
@@ -133,45 +112,27 @@ elif "sport_type" in df.columns:
 
 df["distance_km"] = df["distance"] / 1000
 df["time_min"] = df["moving_time"] / 60
-df["pace"] = df["time_min"] / df["distance_km"]
-df = df[df["distance_km"] > 0]
 
-# Ensure datetime is clean BEFORE anything else
+df = df[df["distance_km"] > 0]
+df["pace"] = df["time_min"] / df["distance_km"]
+
+# FIX DATETIME
 df["start_date_local"] = pd.to_datetime(df["start_date_local"], errors="coerce")
 
-# Remove bad rows
+# 🔥 HANDLE BOTH CASES (WITH OR WITHOUT TIMEZONE)
+if df["start_date_local"].dt.tz is not None:
+    df["start_date_local"] = df["start_date_local"].dt.tz_convert(None)
+
 df = df[df["start_date_local"].notna()]
-df["start_date_local"] = pd.to_datetime(df["start_date_local"])
-# =========================
-# 📊 PROGRESS DATA
-# =========================
 
-df_progress = df.copy()
-
-# Sort oldest → newest
-df_progress = df_progress.sort_values("start_date_local")
-
-# Rolling pace (smooth trend)
-df_progress["pace_rolling"] = df_progress["pace"].rolling(5).mean()
-
-# Estimate 5K time
-df_progress["est_5k"] = df_progress["pace"] * 5
-
-# Weekly grouping
-df_progress["week"] = df_progress["start_date_local"].dt.to_period("W").astype(str)
-
-weekly = df_progress.groupby("week").agg({
-    "distance_km": "sum",
-    "pace": "mean"
-}).reset_index()
+# SORT
 df = df.sort_values("start_date_local", ascending=False)
 
 latest = df.iloc[0]
 
 run_type = classify_run(latest["pace"])
 next_type, duration, pace_range, shoe = get_recommendation(
-    latest["pace"],
-    latest["distance_km"]
+    latest["pace"], latest["distance_km"]
 )
 
 # =========================
@@ -196,134 +157,66 @@ fig = px.line(
     y="distance_km",
     template="plotly_dark"
 )
-
 fig.update_traces(line=dict(color="#00f5ff", width=3))
-
 st.plotly_chart(fig)
+
+# =========================
+# 📊 PROGRESS DATA
+# =========================
+df_progress = df.sort_values("start_date_local")
+
+df_progress["pace_rolling"] = df_progress["pace"].rolling(5).mean()
+df_progress["est_5k"] = df_progress["pace"] * 5
 
 st.subheader("📈 Pace Progress")
 
-fig_pace = px.line(
+fig2 = px.line(
     df_progress.tail(30),
     x="start_date_local",
     y="pace_rolling",
     template="plotly_dark"
 )
+fig2.update_traces(line=dict(color="#ff00ff", width=3))
+st.plotly_chart(fig2)
 
-fig_pace.update_traces(line=dict(color="#ff00ff", width=3))
+# =========================
+# 📅 WEEKLY DISTANCE
+# =========================
+df_progress["week"] = df_progress["start_date_local"].dt.to_period("W").astype(str)
 
-st.plotly_chart(fig_pace)
+weekly = df_progress.groupby("week")["distance_km"].sum().reset_index()
 
 st.subheader("📊 Weekly Distance")
 
-fig_week = px.bar(
+fig3 = px.bar(
     weekly.tail(8),
     x="week",
     y="distance_km",
     template="plotly_dark"
 )
-
-fig_week.update_traces(marker_color="#00f5ff")
-
-st.plotly_chart(fig_week)
-
-st.subheader("🔥 5K Progress Trend")
-
-fig_5k = px.line(
-    df_progress.tail(30),
-    x="start_date_local",
-    y="est_5k",
-    template="plotly_dark"
-)
-
-fig_5k.update_traces(line=dict(color="#39ff14", width=3))
-
-st.plotly_chart(fig_5k)
+fig3.update_traces(marker_color="#00f5ff")
+st.plotly_chart(fig3)
 
 # =========================
-# 🧠 PROGRESS STATUS
+# 🧠 TRAINING LOGIC
 # =========================
-
-recent = df_progress.tail(5)["pace"].mean()
-previous = df_progress.tail(10).head(5)["pace"].mean()
-
-if recent < previous:
-    status = "🔥 Improving"
-elif recent > previous:
-    status = "⚠️ Slowing"
-else:
-    status = "➖ Stable"
-
-st.subheader("🧠 Progress Status")
-st.write(status)
-# =========================
-# 🧠 EXTRA STATS
-# =========================
-last5 = df.head(5)
-avg_pace_5 = last5["pace"].mean()
-
-df["start_date_local"] = pd.to_datetime(df["start_date_local"], errors="coerce")
-
-today = pd.Timestamp.now()
-
-last_7_days = df[
-    df["start_date_local"].notna() &
-    (df["start_date_local"] > (today - pd.Timedelta(days=7)))
-]
-
-weekly_km = last_7_days["distance_km"].sum()
-
-avg_hr = latest.get("average_heartrate")
-if avg_hr and avg_hr > 200:
-    avg_hr = None
-
-VO2_MAX = 41
-GOAL_5K = "Sub 30 min"
-
-# =========================
-# 📊 PERFORMANCE
-# =========================
-st.subheader("⚡ Performance Overview")
-
-col4, col5, col6, col7 = st.columns(4)
-
-col4.metric("Avg Pace (Last 5)", f"{avg_pace_5:.2f} /km")
-col5.metric("Weekly Distance", f"{weekly_km:.2f} km")
-col6.metric("Avg HR", f"{avg_hr:.0f} bpm" if avg_hr else "N/A")
-col7.metric("VO2 Max", VO2_MAX)
-# =========================
-# 📅 NEXT RUN DATE LOGIC
-# =========================
-
-from datetime import timedelta
-
-today = pd.Timestamp.now()
+today = pd.Timestamp.now(tz=None).normalize()
 
 last_7_days = df[
     df["start_date_local"] >= (today - pd.Timedelta(days=7))
 ]
-
 weekly_km = last_7_days["distance_km"].sum() if not last_7_days.empty else 0
-
-# =========================
-# 🧠 TRAINING LOAD (last 7 days)
-# =========================
 
 recent_runs = df.head(7)
 
 training_load = (recent_runs["distance_km"] * recent_runs["pace"]).sum()
 
-# Normalize (simple scale)
 if training_load < 150:
     load_status = "🟢 Low"
 elif training_load < 300:
     load_status = "🟡 Moderate"
 else:
     load_status = "🔴 High"
-
-# =========================
-# 🧠 FATIGUE SCORE
-# =========================
 
 recent_pace = recent_runs["pace"].mean()
 baseline_pace = df.head(20)["pace"].mean()
@@ -337,84 +230,68 @@ elif fatigue_score > 1.05:
 else:
     fatigue_status = "🟢 Fresh"
 
-# =========================
-# 🧠 SHOULD YOU RUN TODAY?
-# =========================
-
-today = pd.Timestamp.now().date()
 last_run_date = latest["start_date_local"].date()
-
-days_since_last = (today - last_run_date).days
+days_since_last = (today.date() - last_run_date).days
 
 if fatigue_status == "🔴 Fatigued":
     decision = "❌ Rest Day"
 elif days_since_last == 0:
-    decision = "❌ Already Ran Today"
+    decision = "❌ Already Ran"
 elif training_load > 300:
-    decision = "⚠️ Take it Easy or Rest"
+    decision = "⚠️ Easy or Rest"
 else:
     decision = "✅ Good to Run"
 
+# =========================
+# 🧠 DISPLAY INTEL
+# =========================
 st.subheader("🧠 Training Intelligence")
 
-colX, colY, colZ = st.columns(3)
+c1, c2, c3 = st.columns(3)
 
-colX.metric("Training Load", f"{training_load:.0f}", load_status)
-colY.metric("Fatigue", fatigue_status)
-colZ.metric("Today", decision)
+c1.metric("Training Load", f"{training_load:.0f}", load_status)
+c2.metric("Fatigue", fatigue_status)
+c3.metric("Today", decision)
 
 # =========================
-# 📅 AUTO REST LOGIC
+# 📅 NEXT RUN DATE
 # =========================
-
-if fatigue_status == "🔴 Fatigued":
-    next_run_date = latest["start_date_local"] + pd.Timedelta(days=2)
-elif training_load > 300:
+if fatigue_status == "🔴 Fatigued" or training_load > 300:
     next_run_date = latest["start_date_local"] + pd.Timedelta(days=2)
 else:
     next_run_date = latest["start_date_local"] + pd.Timedelta(days=1)
 
 next_run_str = next_run_date.strftime("%A, %b %d")
 
-st.subheader("🧠 Training Intelligence")
-
-colX, colY, colZ = st.columns(3)
-
-colX.metric("Training Load", f"{training_load:.0f}", load_status)
-colY.metric("Fatigue", fatigue_status)
-colZ.metric("Today", decision)
+st.subheader("📅 Next Run")
+st.write(f"🗓 {next_run_str}")
 
 # =========================
 # 🎯 RECOMMENDATION
 # =========================
-st.subheader("⚡ Next Run Recommendation")
+st.subheader("⚡ Next Run Plan")
 
-colA, colB = st.columns(2)
+cA, cB = st.columns(2)
 
-colA.write(f"⚡ Type: {next_type}")
-colA.write(f"🔥 Duration: {duration}")
+cA.write(f"🏃 {next_type}")
+cA.write(f"⏱ {duration}")
 
-colB.write(f"💜 Pace Target: {pace_range}")
-colB.write(f"👟 Shoe: {shoe}")
-st.subheader("📅 Next Run Schedule")
-
-st.write(f"🗓 Next Run: **{next_run_str}**")
-
+cB.write(f"⚡ {pace_range}")
+cB.write(f"👟 {shoe}")
 
 # =========================
 # 🎯 GOAL
 # =========================
 st.subheader("🎯 Goal")
 
-st.write(f"🏁 5K Goal: {GOAL_5K}")
-
+GOAL_5K = "Sub 30 min"
 estimated_5k = latest["pace"] * 5
+
+st.write(f"🏁 Goal: {GOAL_5K}")
 st.write(f"📈 Estimated 5K: {estimated_5k:.1f} min")
 
-
-
 # =========================
-# 🔍 DEBUG
+# DEBUG
 # =========================
 with st.expander("Debug Data"):
     st.write(df.head())
