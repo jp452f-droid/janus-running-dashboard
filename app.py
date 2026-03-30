@@ -264,7 +264,9 @@ today = pd.Timestamp.now()
 last_7_days = df[
     df["start_date_local"].notna() &
     (df["start_date_local"] > (today - pd.Timedelta(days=7)))
-]weekly_km = last_7_days["distance_km"].sum()
+]
+
+weekly_km = last_7_days["distance_km"].sum()
 
 avg_hr = latest.get("average_heartrate")
 if avg_hr and avg_hr > 200:
