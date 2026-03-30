@@ -137,7 +137,28 @@ df = df[df["distance_km"] > 0]
 
 df["pace"] = df["time_min"] / df["distance_km"]
 df["start_date_local"] = pd.to_datetime(df["start_date_local"])
+# =========================
+# 📊 PROGRESS DATA
+# =========================
 
+df_progress = df.copy()
+
+# Sort oldest → newest
+df_progress = df_progress.sort_values("start_date_local")
+
+# Rolling pace (smooth trend)
+df_progress["pace_rolling"] = df_progress["pace"].rolling(5).mean()
+
+# Estimate 5K time
+df_progress["est_5k"] = df_progress["pace"] * 5
+
+# Weekly grouping
+df_progress["week"] = df_progress["start_date_local"].dt.to_period("W").astype(str)
+
+weekly = df_progress.groupby("week").agg({
+    "distance_km": "sum",
+    "pace": "mean"
+}).reset_index()
 df = df.sort_values("start_date_local", ascending=False)
 
 latest = df.iloc[0]
@@ -175,14 +196,75 @@ fig.update_traces(line=dict(color="#00f5ff", width=3))
 
 st.plotly_chart(fig)
 
+st.subheader("📈 Pace Progress")
+
+fig_pace = px.line(
+    df_progress.tail(30),
+    x="start_date_local",
+    y="pace_rolling",
+    template="plotly_dark"
+)
+
+fig_pace.update_traces(line=dict(color="#ff00ff", width=3))
+
+st.plotly_chart(fig_pace)
+
+st.subheader("📊 Weekly Distance")
+
+fig_week = px.bar(
+    weekly.tail(8),
+    x="week",
+    y="distance_km",
+    template="plotly_dark"
+)
+
+fig_week.update_traces(marker_color="#00f5ff")
+
+st.plotly_chart(fig_week)
+
+st.subheader("🔥 5K Progress Trend")
+
+fig_5k = px.line(
+    df_progress.tail(30),
+    x="start_date_local",
+    y="est_5k",
+    template="plotly_dark"
+)
+
+fig_5k.update_traces(line=dict(color="#39ff14", width=3))
+
+st.plotly_chart(fig_5k)
+
+# =========================
+# 🧠 PROGRESS STATUS
+# =========================
+
+recent = df_progress.tail(5)["pace"].mean()
+previous = df_progress.tail(10).head(5)["pace"].mean()
+
+if recent < previous:
+    status = "🔥 Improving"
+elif recent > previous:
+    status = "⚠️ Slowing"
+else:
+    status = "➖ Stable"
+
+st.subheader("🧠 Progress Status")
+st.write(status)
 # =========================
 # 🧠 EXTRA STATS
 # =========================
 last5 = df.head(5)
 avg_pace_5 = last5["pace"].mean()
 
-last_7_days = df[df["start_date_local"] > (pd.Timestamp.now() - pd.Timedelta(days=7))]
-weekly_km = last_7_days["distance_km"].sum()
+df["start_date_local"] = pd.to_datetime(df["start_date_local"], errors="coerce")
+
+today = pd.Timestamp.now()
+
+last_7_days = df[
+    df["start_date_local"].notna() &
+    (df["start_date_local"] > (today - pd.Timedelta(days=7)))
+]weekly_km = last_7_days["distance_km"].sum()
 
 avg_hr = latest.get("average_heartrate")
 if avg_hr and avg_hr > 200:
@@ -202,7 +284,22 @@ col4.metric("Avg Pace (Last 5)", f"{avg_pace_5:.2f} /km")
 col5.metric("Weekly Distance", f"{weekly_km:.2f} km")
 col6.metric("Avg HR", f"{avg_hr:.0f} bpm" if avg_hr else "N/A")
 col7.metric("VO2 Max", VO2_MAX)
+# =========================
+# 📅 NEXT RUN DATE LOGIC
+# =========================
 
+from datetime import timedelta
+
+last_run_date = latest["start_date_local"]
+
+if run_type == "Hard":
+    next_run_date = last_run_date + timedelta(days=2)
+elif run_type == "Easy":
+    next_run_date = last_run_date + timedelta(days=1)
+else:
+    next_run_date = last_run_date + timedelta(days=1)
+
+next_run_str = next_run_date.strftime("%A, %b %d")
 # =========================
 # 🎯 RECOMMENDATION
 # =========================
@@ -215,7 +312,9 @@ colA.write(f"🔥 Duration: {duration}")
 
 colB.write(f"💜 Pace Target: {pace_range}")
 colB.write(f"👟 Shoe: {shoe}")
+st.subheader("📅 Next Run Schedule")
 
+st.write(f"🗓 Next Run: **{next_run_str}**")
 # =========================
 # 🎯 GOAL
 # =========================
