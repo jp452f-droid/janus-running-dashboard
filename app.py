@@ -133,6 +133,7 @@ elif "sport_type" in df.columns:
 
 df["distance_km"] = df["distance"] / 1000
 df["time_min"] = df["moving_time"] / 60
+df["pace"] = df["time_min"] / df["distance_km"]
 df = df[df["distance_km"] > 0]
 
 # Ensure datetime is clean BEFORE anything else
@@ -303,6 +304,86 @@ last_7_days = df[
 ]
 
 weekly_km = last_7_days["distance_km"].sum() if not last_7_days.empty else 0
+
+# =========================
+# 🧠 TRAINING LOAD (last 7 days)
+# =========================
+
+recent_runs = df.head(7)
+
+training_load = (recent_runs["distance_km"] * recent_runs["pace"]).sum()
+
+# Normalize (simple scale)
+if training_load < 150:
+    load_status = "🟢 Low"
+elif training_load < 300:
+    load_status = "🟡 Moderate"
+else:
+    load_status = "🔴 High"
+
+# =========================
+# 🧠 FATIGUE SCORE
+# =========================
+
+recent_pace = recent_runs["pace"].mean()
+baseline_pace = df.head(20)["pace"].mean()
+
+fatigue_score = recent_pace / baseline_pace if baseline_pace else 1
+
+if fatigue_score > 1.1:
+    fatigue_status = "🔴 Fatigued"
+elif fatigue_score > 1.05:
+    fatigue_status = "🟡 Slight Fatigue"
+else:
+    fatigue_status = "🟢 Fresh"
+
+# =========================
+# 🧠 SHOULD YOU RUN TODAY?
+# =========================
+
+today = pd.Timestamp.now().date()
+last_run_date = latest["start_date_local"].date()
+
+days_since_last = (today - last_run_date).days
+
+if fatigue_status == "🔴 Fatigued":
+    decision = "❌ Rest Day"
+elif days_since_last == 0:
+    decision = "❌ Already Ran Today"
+elif training_load > 300:
+    decision = "⚠️ Take it Easy or Rest"
+else:
+    decision = "✅ Good to Run"
+
+st.subheader("🧠 Training Intelligence")
+
+colX, colY, colZ = st.columns(3)
+
+colX.metric("Training Load", f"{training_load:.0f}", load_status)
+colY.metric("Fatigue", fatigue_status)
+colZ.metric("Today", decision)
+
+# =========================
+# 📅 AUTO REST LOGIC
+# =========================
+
+if fatigue_status == "🔴 Fatigued":
+    next_run_date = latest["start_date_local"] + pd.Timedelta(days=2)
+elif training_load > 300:
+    next_run_date = latest["start_date_local"] + pd.Timedelta(days=2)
+else:
+    next_run_date = latest["start_date_local"] + pd.Timedelta(days=1)
+
+next_run_str = next_run_date.strftime("%A, %b %d")
+
+st.subheader("🧠 Training Intelligence")
+
+colX, colY, colZ = st.columns(3)
+
+colX.metric("Training Load", f"{training_load:.0f}", load_status)
+colY.metric("Fatigue", fatigue_status)
+colZ.metric("Today", decision)
+
 # =========================
 # 🎯 RECOMMENDATION
 # =========================
@@ -318,6 +399,8 @@ colB.write(f"👟 Shoe: {shoe}")
 st.subheader("📅 Next Run Schedule")
 
 st.write(f"🗓 Next Run: **{next_run_str}**")
+
+
 # =========================
 # 🎯 GOAL
 # =========================
@@ -327,6 +410,8 @@ st.write(f"🏁 5K Goal: {GOAL_5K}")
 
 estimated_5k = latest["pace"] * 5
 st.write(f"📈 Estimated 5K: {estimated_5k:.1f} min")
+
+
 
 # =========================
 # 🔍 DEBUG
