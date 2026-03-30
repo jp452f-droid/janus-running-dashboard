@@ -135,7 +135,11 @@ df["distance_km"] = df["distance"] / 1000
 df["time_min"] = df["moving_time"] / 60
 df = df[df["distance_km"] > 0]
 
-df["pace"] = df["time_min"] / df["distance_km"]
+# Ensure datetime is clean BEFORE anything else
+df["start_date_local"] = pd.to_datetime(df["start_date_local"], errors="coerce")
+
+# Remove bad rows
+df = df[df["start_date_local"].notna()]
 df["start_date_local"] = pd.to_datetime(df["start_date_local"])
 # =========================
 # 📊 PROGRESS DATA
@@ -292,16 +296,13 @@ col7.metric("VO2 Max", VO2_MAX)
 
 from datetime import timedelta
 
-last_run_date = latest["start_date_local"]
+today = pd.Timestamp.now()
 
-if run_type == "Hard":
-    next_run_date = last_run_date + timedelta(days=2)
-elif run_type == "Easy":
-    next_run_date = last_run_date + timedelta(days=1)
-else:
-    next_run_date = last_run_date + timedelta(days=1)
+last_7_days = df[
+    df["start_date_local"] >= (today - pd.Timedelta(days=7))
+]
 
-next_run_str = next_run_date.strftime("%A, %b %d")
+weekly_km = last_7_days["distance_km"].sum() if not last_7_days.empty else 0
 # =========================
 # 🎯 RECOMMENDATION
 # =========================
